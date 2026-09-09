@@ -18,6 +18,8 @@ def dedupe_articles(articles, threshold=0.85, score_key=None):
     """articles: list of dicts with a 'title' key.
     score_key: optional key to prefer the higher-scoring duplicate
                (e.g. 'score'), otherwise first-seen wins.
+    Also tags the kept article with 'corroboration': how many sources
+    reported a near-duplicate of it (1 = only one source found it).
     """
     kept = []
     for art in articles:
@@ -28,7 +30,12 @@ def dedupe_articles(articles, threshold=0.85, score_key=None):
                 match_idx = i
                 break
         if match_idx is None:
+            art["corroboration"] = 1
             kept.append(art)
-        elif score_key and art.get(score_key, 0) > kept[match_idx].get(score_key, 0):
-            kept[match_idx] = art
+        else:
+            kept[match_idx]["corroboration"] = kept[match_idx].get("corroboration", 1) + 1
+            if score_key and art.get(score_key, 0) > kept[match_idx].get(score_key, 0):
+                carried_corroboration = kept[match_idx]["corroboration"]
+                art["corroboration"] = carried_corroboration
+                kept[match_idx] = art
     return kept

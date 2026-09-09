@@ -9,7 +9,7 @@ from email.mime.text import MIMEText
 
 from config import (SMTP_HOST, SMTP_PORT, EMAIL_FROM, EMAIL_TO, EMAIL_APP_PASSWORD,
                      UPCOMING_DAYS, ARCHIVE_DIGESTS, ARCHIVE_DIR, ACTIVE_CATEGORIES)
-from database import recent_articles, upcoming_events
+from database import recent_articles, unemailed_articles, mark_emailed, upcoming_events
 
 CATEGORY_LABELS = {
     "GEOPOLITICS": "🌍 Geopolitics",
@@ -40,12 +40,17 @@ def _section_html(category, items):
             f"<span style='font-size:13px;color:#718096;font-weight:normal'>({len(items)})</span></h2>"]
     for a in items:
         color = RISK_COLORS.get(a["risk_level"], "#718096")
+        credibility = a.get("credibility", "MEDIUM")
+        cred_color = {"HIGH": "#2f855a", "MEDIUM": "#b7791f", "LOW": "#a0aec0"}.get(credibility, "#a0aec0")
+        corroboration = a.get("corroboration", 1)
         rows.append(f"""
         <div style="margin-bottom:18px;padding:14px 16px;border-left:4px solid {color};background:#f7fafc;border-radius:4px">
             <div style="font-size:11px;color:#718096;font-weight:600;text-transform:uppercase;margin-bottom:4px">
                 {html.escape(a['source'] or '')} &middot;
+                <span style="color:{cred_color}">{html.escape(credibility)} credibility</span> &middot;
                 <span style="color:{color}">{html.escape(a['risk_level'])}</span> &middot; score {a['score']}/100
                 {f" &middot; {html.escape(a['country'])}" if a['country'] else ""}
+                {f" &middot; confirmed by {corroboration} sources" if corroboration > 1 else ""}
             </div>
             <h3 style="margin:0 0 6px;font-size:15px;line-height:1.4">
                 <a href="{html.escape(a['url'])}" style="color:#1a365d;text-decoration:none">{html.escape(a['title'])}</a>
@@ -55,8 +60,12 @@ def _section_html(category, items):
     return "".join(rows)
 
 
-def build_html():
-    articles = recent_articles()
+def build_html(mark_as_sent=True):
+    """Builds the digest HTML from articles not yet included in a previous
+    digest. By default also marks them as sent, so the next call (the next
+    scheduled digest) won't repeat the same stories. Pass
+    mark_as_sent=False to preview without consuming the queue."""
+    articles = unemailed_articles()
     events = upcoming_events(UPCOMING_DAYS)
     grouped = _group_articles(articles)
     total_relevant = sum(len(v) for v in grouped.values())
@@ -103,6 +112,10 @@ def build_html():
         Auto-generated briefing. Verify important information with the original source.
     </td></tr>
     </table></td></tr></table></body></html>""")
+
+    if mark_as_sent and articles:
+        mark_emailed([a["_id"] for a in articles])
+
     return "".join(body)
 
 
@@ -134,4 +147,4 @@ def send():
     context = ssl.create_default_context()
     with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context) as server:
         server.login(EMAIL_FROM, EMAIL_APP_PASSWORD)
-        server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
+        server.sendmail(EMAIL_FROM, [addr.strip() for addr in EMAIL_TO.split(",")], msg.as_string())

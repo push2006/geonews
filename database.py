@@ -62,6 +62,25 @@ def recent_articles(limit=60):
     return list(cur)
 
 
+def unemailed_articles(limit=60):
+    """Same as recent_articles(), but excludes anything already included in
+    a previous digest — this is what stops the 10pm email repeating the
+    same stories the 10am one already sent."""
+    db = connect()
+    cur = db.articles.find({"emailed": {"$ne": True}}) \
+        .sort([("score", DESCENDING), ("published", DESCENDING)]).limit(limit)
+    return list(cur)
+
+
+def mark_emailed(article_ids):
+    """Flags the given articles (by their MongoDB _id) as already sent in
+    a digest, so the next digest won't repeat them."""
+    if not article_ids:
+        return
+    db = connect()
+    db.articles.update_many({"_id": {"$in": list(article_ids)}}, {"$set": {"emailed": True}})
+
+
 def upcoming_events(days=90):
     db = connect()
     today = datetime.now(timezone.utc).date()

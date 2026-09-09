@@ -1,6 +1,4 @@
-                          
-
-# Geo Intel Monitor model 
+# Geo Intel Monitor V2
 
 Python + SQLite monitor for geopolitical news, trade, sanctions, risk signals,
 upcoming events, research feeds, and automated HTML email (with optional
@@ -138,38 +136,73 @@ fails independently (logged, not fatal) so one broken feed never stops a run.
 
 ## Deploying: Render (free) + MongoDB Atlas (free) + Google Apps Script
 
-This setup replaces local SQLite + `scheduler.py` with continuous cloud
-collection and twice-daily emails, without changing any collection,
-scoring, or filtering logic.
+This replaces local SQLite + `scheduler.py` with continuous cloud
+collection and scheduled emails, without changing any collection, scoring,
+or filtering logic. Follow these steps in order.
 
-**1. MongoDB Atlas (storage)**
-- Create a free M0 cluster at https://www.mongodb.com/cloud/atlas
-- Database Access: create a user + password
-- Network Access: allow `0.0.0.0/0` (Render's IP isn't fixed on free tier)
-- Get the connection string (Connect > Drivers > Python) → this is `MONGODB_URI`
+**1. MongoDB Atlas (storage) — free M0 cluster**
+1. Sign up at https://www.mongodb.com/cloud/atlas, create a free M0 cluster
+2. Database Access → create a username + password (save these)
+3. Network Access → Add IP Address → Allow access from anywhere (`0.0.0.0/0`)
+   — Render's IP isn't fixed on the free tier, so this is required
+4. Connect → Drivers → Python → copy the connection string. This is your
+   `MONGODB_URI` (looks like `mongodb+srv://user:pass@cluster0.xxxxx.mongodb.net/`)
 
-**2. Render (runs the app, 24/7 via Apps Script pings)**
-- New Web Service, connect this repo
-- Build command: `pip install -r requirements.txt`
-- Start command: `gunicorn web:app --bind 0.0.0.0:$PORT` (already in `Procfile`)
-- Add environment variables from `.env.example`, including `MONGODB_URI`
-  and a `TRIGGER_SECRET` you make up
-- Note the URL Render gives you, e.g. `https://geo-intel-xxxx.onrender.com`
+**2. Push this code to GitHub**
+Render deploys from a GitHub repo. Create one and push everything in this
+zip into it (all folders and files, including `Procfile`, `runtime.txt`,
+and the hidden-looking `apps_script/` folder).
 
-**3. Google Apps Script (scheduler + mailer)**
-- Go to https://script.google.com → New project → paste in `apps_script/Code.gs`
-- Project Settings > Script Properties, add:
-  - `RENDER_BASE_URL` = your Render URL from step 2
-  - `TRIGGER_SECRET` = same value as in Render's env vars
-  - `EMAIL_TO` = the Gmail address you want digests sent to
-- Run `setupTriggers` once and approve permissions — this installs:
-  - a ping every ~12 min to `/collect` (keeps Render awake + collecting continuously)
-  - digest emails at 10:00 and 22:00, sent via `GmailApp` (sidesteps Render's
-    free-tier SMTP issues — Render only returns JSON, Apps Script sends the email)
+**3. Render (runs the app)**
+1. https://render.com → New → Web Service → connect your GitHub repo
+2. Build Command: `pip install -r requirements.txt`
+3. Start Command: leave default — it reads from `Procfile` automatically
+4. Instance type: Free
+5. Environment tab → add every variable from `.env.example`, with your
+   real values (`MONGODB_URI` from step 1, a made-up `TRIGGER_SECRET`,
+   your Gmail address for `EMAIL_FROM`/`EMAIL_TO`, and a Gmail **App
+   Password** — not your real password — for `EMAIL_APP_PASSWORD`,
+   generated at https://myaccount.google.com/apppasswords)
+6. Also add `PYTHON_VERSION` = `3.11.9` (avoids a known SSL bug between
+   very new Python versions and MongoDB Atlas)
+7. Deploy. Once live, open `https://your-app.onrender.com/health` —
+   it should show `{"status":"ok"}`. Save this URL for step 4.
 
-If Render's direct SMTP send (`/send-digest`) works fine for you, you can
-use that instead and skip the Gmail-sending part of Apps Script — just
-point two Apps Script triggers at `/send-digest` instead of `sendDigest()`.
+**4. Google Apps Script (scheduler + mailer)**
+1. https://script.google.com → New project
+2. Paste `apps_script/Code.gs`'s contents in as the main file
+3. Click the gear icon (Project Settings) → check "Show appsscript.json
+   manifest file in editor" → open that new file → replace its contents
+   with `apps_script/appsscript.json` from this zip (this pins the
+   schedule to `Asia/Kolkata` so 10:00/22:00 actually means Indian time,
+   not whatever timezone the script defaults to)
+4. Still in Project Settings, scroll to **Script Properties**, add 3 rows:
+   - `RENDER_BASE_URL` → your Render URL from step 3 (no trailing slash)
+   - `TRIGGER_SECRET` → same value as Render's `TRIGGER_SECRET`
+   - `EMAIL_TO` → your Gmail address (comma-separate for multiple people)
+5. Function dropdown (top toolbar) → select `setupTriggers` → click Run →
+   approve the permissions it asks for
+6. Click the clock icon (Triggers) on the left — confirm 6 triggers now
+   exist: `keepAlive` (10 min), `runCollect` (30 min), `sendDigest` (×2,
+   10:00 & 22:00), `checkCritical` (30 min), `sendWeekly` (Monday 9:00)
+
+**5. Test it**
+- Function dropdown → `sendDigest` → Run → check your inbox
+- Wait ~10 min → check MongoDB Atlas → Collections → `articles` should be
+  growing
+- Next day, check the Triggers page — "Last run" should show real
+  timestamps instead of "-"
+
+**Notes on how the scheduling works:**
+- `keepAlive` pings `/health` every 10 min just to stop Render's free tier
+  from sleeping — it's cheap and doesn't run collection
+- `runCollect` does the actual (heavier) collection job every 30 min —
+  that's what "24/7 collecting" means here, not collecting every few minutes
+- Each digest only includes articles not already sent in a previous
+  digest, so 10pm won't repeat what 10am already sent
+- Critical alerts and the weekly report are independent of the digest —
+  they can still mention an item even if it already appeared in a digest,
+  since they serve a different purpose (immediate alert / weekly recap)
 
 ## V3 ideas
 

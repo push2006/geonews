@@ -58,7 +58,8 @@ def collect():
                 continue
             candidates.append({
                 "title": title, "url": link, "source": source,
-                "category": category, "summary": summary[:2000],
+                "credibility": "MEDIUM",  # Google News aggregates many publishers; can't rate individually
+                "category": category, "summary": summary[:600],
                 "published": datetime.now(timezone.utc).isoformat(),
                 "score": score, "risk_level": level, "country": country,
             })
