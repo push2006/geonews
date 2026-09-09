@@ -1,0 +1,15 @@
+feedparser>=6.0.11
+requests>=2.32.0
+python-dateutil>=2.9.0
+python-dotenv>=1.0.1
+PyYAML>=6.0.1
+schedule>=1.2.2
+pymongo>=4.8.0
+Flask>=3.0.3
+gunicorn>=22.0.0
+
+# optional - only needed if ENABLE_FULL_TEXT=true in .env
+trafilatura>=1.8.0
+
+# optional - only needed if ENABLE_GNEWS=true in .env
+gnews>=0.3.6

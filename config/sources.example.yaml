@@ -1,0 +1,13 @@
+sources:
+  - name: WTO
+    category: trade
+    url: https://www.wto.org/english/news_e/news_e.rss
+    credibility: 0.95
+  - name: BIS Research
+    category: research
+    url: https://www.bis.org/rss/research.rss
+    credibility: 0.95
+  - name: BBC World
+    category: geopolitics
+    url: https://feeds.bbci.co.uk/news/world/rss.xml
+    credibility: 0.80
