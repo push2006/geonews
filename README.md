@@ -1,4 +1,7 @@
-# Geo Intel Monitor V2
+
+<head>propush</head>
+
+# Geo Intel Monitor model 
 
 Python + SQLite monitor for geopolitical news, trade, sanctions, risk signals,
 upcoming events, research feeds, and automated HTML email (with optional
