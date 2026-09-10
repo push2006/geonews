@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from config import (MAX_ITEMS_PER_FEED, LOOKBACK_HOURS, ENABLE_FULL_TEXT,
                      FULL_TEXT_MAX_CHARS, FULL_TEXT_WORKERS, DEDUPE_THRESHOLD,
                      ACTIVE_CATEGORIES)
-from processing.classifier import classify, parse_date
+from processing.classifier import classify, parse_date, strip_html
 from processing.extract import extract_full_text
 from processing.dedupe import dedupe_articles
 from database import save_article
@@ -79,7 +79,7 @@ def collect(extra_feeds=None):
             for entry in feed.entries[:MAX_ITEMS_PER_FEED]:
                 title = entry.get("title", "").strip()
                 link = entry.get("link", "").strip()
-                summary = entry.get("summary", entry.get("description", "")).strip()
+                summary = strip_html(entry.get("summary", entry.get("description", "")))
                 if not title or not link:
                     continue
                 published = parse_date(entry.get("published", entry.get("updated", "")))

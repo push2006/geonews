@@ -17,6 +17,10 @@ Routes (all require ?key=TRIGGER_SECRET, except /health):
   GET  /dashboard       -> full browser dashboard: articles, events
                             calendar, and stats (open this in a browser
                             with ?key=YOUR_TRIGGER_SECRET on the end)
+  POST /archive-old     -> archives articles older than ARCHIVE_AFTER_DAYS
+                            to a Telegram channel (pinned), then deletes
+                            them from MongoDB — keeps free-tier storage
+                            healthy over a long deployment
 """
 import os
 import logging
@@ -24,7 +28,8 @@ from flask import Flask, request, jsonify, Response
 
 from config import (ENABLE_GNEWS, EXTRA_RSS_FEEDS, TRIGGER_SECRET,
                      UPCOMING_DAYS, ACTIVE_CATEGORIES,
-                     ENABLE_CRITICAL_ALERTS, ENABLE_WEEKLY_REPORT)
+                     ENABLE_CRITICAL_ALERTS, ENABLE_WEEKLY_REPORT,
+                     ENABLE_TELEGRAM_ARCHIVE)
 from config_check import check_config
 from database import init_db, recent_articles, upcoming_events
 from collectors.rss import collect as collect_rss
@@ -34,6 +39,7 @@ from reports.email_report import send as send_email_smtp, build_html
 from reports.critical_alert import send_if_critical
 from reports.weekly_report import send as send_weekly
 from reports.dashboard import build_dashboard_html
+from reports.telegram_archive import archive_and_purge
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("web")
@@ -141,6 +147,20 @@ def dashboard():
     if (err := _db_check()):
         return err
     return Response(build_dashboard_html(), mimetype="text/html")
+
+
+@app.route("/archive-old", methods=["GET", "POST"])
+def archive_old():
+    """Moves old articles to a Telegram channel and removes them from
+    MongoDB, keeping storage lean over a long-running deployment."""
+    if not _authorized():
+        return jsonify(error="unauthorized"), 401
+    if (err := _db_check()):
+        return err
+    if not ENABLE_TELEGRAM_ARCHIVE:
+        return jsonify(skipped="ENABLE_TELEGRAM_ARCHIVE is false")
+    result = archive_and_purge()
+    return jsonify(result)
 
 
 if __name__ == "__main__":

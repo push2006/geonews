@@ -9,6 +9,7 @@ from collections import defaultdict
 from datetime import datetime
 
 from database import recent_articles, upcoming_events, critical_since, category_counts, top_countries
+from config import ARCHIVE_AFTER_DAYS, ENABLE_TELEGRAM_ARCHIVE
 
 CATEGORY_LABELS = {
     "GEOPOLITICS": "🌍 Geopolitics", "CONFERENCE": "🗓️ Conferences & Meetings",
@@ -46,6 +47,8 @@ header p{margin:8px 0 0;font-size:13px;opacity:0.85}
 .barrow .fill{background:#2b6cb0;height:100%}
 .barrow .cnt{width:30px;text-align:right;color:#718096}
 .event-date{display:inline-block;background:#2b6cb0;color:white;font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:8px}
+.searchbox{width:100%;padding:10px 14px;font-size:14px;border:1px solid #cbd5e0;border-radius:8px;margin-bottom:16px;box-sizing:border-box}
+.footer-note{text-align:center;font-size:12px;color:#a0aec0;margin:20px 0}
 """
 
 
@@ -53,8 +56,21 @@ def _stat(num, label):
     return f'<div class="stat"><div class="num">{num}</div><div class="lbl">{html.escape(label)}</div></div>'
 
 
+def _bar_section(title, rows, max_val):
+    out = [f'<div class="card"><h2>{title}</h2>']
+    for label, cnt, color in rows:
+        pct = int((cnt / max_val) * 100) if max_val else 0
+        out.append(f"""<div class="barrow"><div class="name">{html.escape(label)}</div>
+            <div class="bar"><div class="fill" style="width:{pct}%;background:{color}"></div></div>
+            <div class="cnt">{cnt}</div></div>""")
+    if not rows:
+        out.append("<p style='color:#718096;font-size:13px'>No data yet.</p>")
+    out.append("</div>")
+    return "".join(out)
+
+
 def build_dashboard_html():
-    articles = recent_articles(limit=150)
+    articles = recent_articles(limit=200)
     events = upcoming_events(120)
     critical = critical_since(24)
     cats = category_counts(7)
@@ -62,6 +78,19 @@ def build_dashboard_html():
 
     max_cat = max((c["cnt"] for c in cats), default=1)
     now = datetime.now().strftime("%d %b %Y, %H:%M")
+
+    # Risk-level breakdown (from the currently loaded article set)
+    risk_counts = defaultdict(int)
+    cred_counts = defaultdict(int)
+    for a in articles:
+        risk_counts[a.get("risk_level") or "LOW"] += 1
+        cred_counts[a.get("credibility") or "MEDIUM"] += 1
+    risk_rows = [(lvl, risk_counts.get(lvl, 0), RISK_COLORS[lvl])
+                 for lvl in ("CRITICAL", "HIGH", "MODERATE", "LOW") if risk_counts.get(lvl)]
+    cred_rows = [(lvl, cred_counts.get(lvl, 0), CRED_COLORS[lvl])
+                 for lvl in ("HIGH", "MEDIUM", "LOW") if cred_counts.get(lvl)]
+    max_risk = max((r[1] for r in risk_rows), default=1)
+    max_cred = max((r[1] for r in cred_rows), default=1)
 
     body = [f"""<!DOCTYPE html><html><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -74,17 +103,14 @@ def build_dashboard_html():
         {_stat(len(cats), "Active categories")}
     </div>
 
-    <div class="card"><h2>📊 Volume by category (7 days)</h2>"""]
+    <input type="text" class="searchbox" id="searchBox" placeholder="🔎 Filter articles by title, source, or country..." onkeyup="filterArticles()">
+    """]
 
-    for c in cats:
-        label = CATEGORY_LABELS.get(c["category"], c["category"] or "Other")
-        pct = int((c["cnt"] / max_cat) * 100) if max_cat else 0
-        body.append(f"""<div class="barrow"><div class="name">{html.escape(label)}</div>
-            <div class="bar"><div class="fill" style="width:{pct}%"></div></div>
-            <div class="cnt">{c['cnt']}</div></div>""")
-    if not cats:
-        body.append("<p style='color:#718096;font-size:13px'>No data yet.</p>")
-    body.append("</div>")
+    body.append(_bar_section("📊 Volume by category (7 days)",
+                              [(CATEGORY_LABELS.get(c["category"], c["category"] or "Other"), c["cnt"], "#2b6cb0")
+                               for c in cats], max_cat))
+    body.append(_bar_section("⚠️ Risk level breakdown", risk_rows, max_risk))
+    body.append(_bar_section("✅ Source credibility breakdown", cred_rows, max_cred))
 
     if countries:
         body.append('<div class="card"><h2>🗺️ Most-mentioned countries (7 days)</h2><p style="font-size:13px;color:#4a5568">')
@@ -103,32 +129,46 @@ def build_dashboard_html():
         body.append("<p style='color:#718096;font-size:13px'>No upcoming events on file.</p>")
     body.append("</div>")
 
-    body.append('<div class="card"><h2>📰 Recent Articles</h2>')
+    body.append('<div class="card"><h2>📰 Recent Articles</h2><div id="articleList">')
     grouped = defaultdict(list)
     for a in articles:
         grouped[a.get("category") or "GENERAL"].append(a)
     for category, items in grouped.items():
         label = CATEGORY_LABELS.get(category, category)
         body.append(f"<h3 style='font-size:14px;color:#2d3748;margin:16px 0 8px'>{html.escape(label)} ({len(items)})</h3>")
-        for a in items[:15]:
+        for a in items[:30]:
             risk_color = RISK_COLORS.get(a.get("risk_level"), "#718096")
             cred = a.get("credibility", "MEDIUM")
             cred_color = CRED_COLORS.get(cred, "#a0aec0")
             corrob = a.get("corroboration", 1)
-            body.append(f"""<div class="item" style="border-left-color:{risk_color}">
+            search_key = html.escape(f"{a.get('title','')} {a.get('source','')} {a.get('country','')}".lower())
+            body.append(f"""<div class="item" data-search="{search_key}" style="border-left-color:{risk_color}">
                 <div class="meta">{html.escape(a.get('source','') or '')} &middot;
                     <span class="badge" style="background:{cred_color}">{html.escape(cred)}</span>
                     <span class="badge" style="background:{risk_color}">{html.escape(a.get('risk_level','') or '')}</span>
                     score {a.get('score',0)}/100
                     {f" &middot; {html.escape(a['country'])}" if a.get('country') else ""}
                     {f" &middot; {corrob} sources" if corrob > 1 else ""}
+                    &middot; {html.escape((a.get('published') or '')[:10])}
                 </div>
                 <a href="{html.escape(a.get('url','#'))}" target="_blank">{html.escape(a.get('title',''))}</a>
-                <div class="summary">{html.escape((a.get('summary') or '')[:250])}</div>
+                <div class="summary">{html.escape((a.get('summary') or '')[:300])}</div>
             </div>""")
     if not articles:
         body.append("<p style='color:#718096;font-size:13px'>No articles collected yet.</p>")
-    body.append("</div>")
+    body.append("</div></div>")
+
+    body.append(f'<p class="footer-note">Showing up to 200 most recent articles. '
+                 f'{"Articles older than " + str(ARCHIVE_AFTER_DAYS) + " days are auto-archived to Telegram." if ENABLE_TELEGRAM_ARCHIVE else "Long-term Telegram archiving is currently off."}</p>')
+
+    body.append("""<script>
+    function filterArticles() {
+        const q = document.getElementById('searchBox').value.toLowerCase();
+        document.querySelectorAll('#articleList .item').forEach(el => {
+            el.style.display = el.getAttribute('data-search').includes(q) ? '' : 'none';
+        });
+    }
+    </script>""")
 
     body.append("</div></body></html>")
     return "".join(body)

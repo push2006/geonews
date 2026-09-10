@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from config import (GNEWS_LANGUAGE, GNEWS_COUNTRY, GNEWS_PERIOD,
                      GNEWS_MAX_RESULTS, GNEWS_QUERY_GROUPS, DEDUPE_THRESHOLD,
                      ACTIVE_CATEGORIES)
-from processing.classifier import classify
+from processing.classifier import classify, strip_html
 from processing.dedupe import dedupe_articles
 from database import save_article
 
@@ -51,7 +51,7 @@ def collect():
                 continue
             seen_titles.add(title)
 
-            summary = (art.get("description") or "").strip()
+            summary = strip_html(art.get("description") or "")
             source = (art.get("publisher") or {}).get("title", "Google News")
             category, score, level, country = classify(title, summary)
             if category not in ACTIVE_CATEGORIES:

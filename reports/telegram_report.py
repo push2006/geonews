@@ -3,6 +3,11 @@
 More reliable than CallMeBot/WhatsApp: official Bot API, no rate-limited
 free-tier quirks, no per-message re-verification.
 
+NOTE on the dashboard link included below: it embeds your TRIGGER_SECRET
+in the URL. Only safe if your Telegram chat/channel is private — don't
+enable this if the chat could be seen by people you don't want accessing
+the dashboard.
+
 One-time setup:
   1. Message @BotFather on Telegram, send /newbot, follow prompts.
      It gives you a token -> TELEGRAM_BOT_TOKEN in .env.
@@ -11,7 +16,7 @@ One-time setup:
      read your chat id from the JSON -> TELEGRAM_CHAT_ID in .env.
 """
 import requests
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, UPCOMING_DAYS
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, UPCOMING_DAYS, DASHBOARD_BASE_URL, TRIGGER_SECRET
 from database import recent_articles, upcoming_events
 
 
@@ -20,6 +25,9 @@ def build_message(limit=8):
     events = upcoming_events(UPCOMING_DAYS)[:3]
 
     lines = ["*Global Geopolitical Intelligence*", ""]
+    if DASHBOARD_BASE_URL and TRIGGER_SECRET:
+        lines.append(f"📊 [View full dashboard]({DASHBOARD_BASE_URL}/dashboard?key={TRIGGER_SECRET})")
+        lines.append("")
     if events:
         lines.append("*Upcoming:*")
         for e in events:

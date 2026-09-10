@@ -8,7 +8,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from config import (SMTP_HOST, SMTP_PORT, EMAIL_FROM, EMAIL_TO, EMAIL_APP_PASSWORD,
-                     UPCOMING_DAYS, ARCHIVE_DIGESTS, ARCHIVE_DIR, ACTIVE_CATEGORIES)
+                     UPCOMING_DAYS, ARCHIVE_DIGESTS, ARCHIVE_DIR, ACTIVE_CATEGORIES,
+                     DASHBOARD_BASE_URL, TRIGGER_SECRET)
 from database import recent_articles, unemailed_articles, mark_emailed, upcoming_events
 
 CATEGORY_LABELS = {
@@ -83,6 +84,7 @@ def build_html(mark_as_sent=True):
         <b>{total_relevant}</b> relevant items &middot;
         <b style="color:#c53030">{critical_count}</b> critical &middot;
         <b>{len(events)}</b> upcoming events in next {UPCOMING_DAYS} days
+        {f' &middot; <a href="{DASHBOARD_BASE_URL}/dashboard?key={TRIGGER_SECRET}" style="color:#2b6cb0">📊 View full dashboard</a>' if DASHBOARD_BASE_URL and TRIGGER_SECRET else ''}
     </td></tr>
     <tr><td style="padding:10px 30px 25px">"""]
 

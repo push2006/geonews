@@ -35,6 +35,10 @@ WEEKLY_REPORT_DAY = os.getenv("WEEKLY_REPORT_DAY", "monday").lower()
 # ?key=... on every request.
 TRIGGER_SECRET = os.getenv("TRIGGER_SECRET", "")
 
+# Render sets this automatically for every deployed service — used to
+# build the "view full dashboard" link in Telegram/email digests.
+DASHBOARD_BASE_URL = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("DASHBOARD_BASE_URL", "")
+
 # ---------- email (required for the daily digest) ----------
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
@@ -97,3 +101,16 @@ WHATSAPP_APIKEY = os.getenv("WHATSAPP_APIKEY", "")
 ENABLE_TELEGRAM = os.getenv("ENABLE_TELEGRAM", "false").lower() == "true"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+# ---------- optional: long-term archive to a Telegram channel ----------
+# Keeps MongoDB's free-tier storage from filling up over a long deployment.
+# Articles older than ARCHIVE_AFTER_DAYS get posted (as text) to a Telegram
+# channel, the summary message is pinned for easy reference, and only THEN
+# are those articles deleted from MongoDB. Uses the same bot as
+# ENABLE_TELEGRAM above; set TELEGRAM_ARCHIVE_CHAT_ID separately if you
+# want the archive in a different channel than the digest (recommended —
+# e.g. a private channel just for this bot). Falls back to TELEGRAM_CHAT_ID
+# if not set.
+ENABLE_TELEGRAM_ARCHIVE = os.getenv("ENABLE_TELEGRAM_ARCHIVE", "false").lower() == "true"
+TELEGRAM_ARCHIVE_CHAT_ID = os.getenv("TELEGRAM_ARCHIVE_CHAT_ID", "") or TELEGRAM_CHAT_ID
+ARCHIVE_AFTER_DAYS = int(os.getenv("ARCHIVE_AFTER_DAYS", "60"))

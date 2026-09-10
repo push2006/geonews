@@ -81,6 +81,27 @@ def mark_emailed(article_ids):
     db.articles.update_many({"_id": {"$in": list(article_ids)}}, {"$set": {"emailed": True}})
 
 
+def get_articles_older_than(days):
+    """Articles older than N days (by created_at), oldest first — used by
+    the Telegram archive/purge job to keep MongoDB from filling up over a
+    long deployment lifetime."""
+    db = connect()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    cur = db.articles.find({"created_at": {"$lt": cutoff}}).sort("created_at", ASCENDING)
+    return list(cur)
+
+
+def delete_articles(article_ids):
+    """Deletes the given articles by _id. Only ever called AFTER they've
+    been successfully archived to Telegram — never deletes unarchived
+    data."""
+    if not article_ids:
+        return 0
+    db = connect()
+    result = db.articles.delete_many({"_id": {"$in": list(article_ids)}})
+    return result.deleted_count
+
+
 def upcoming_events(days=90):
     db = connect()
     today = datetime.now(timezone.utc).date()
