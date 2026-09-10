@@ -1,3 +1,8 @@
+# NOTE: this file is a reference/template only — nothing in the app reads
+# it today. The live source list is DEFAULT_FEEDS in collectors/rss.py;
+# to add a feed right now, either edit that list directly or add its URL
+# to EXTRA_RSS_FEEDS in .env (comma-separated). Loading sources from this
+# YAML file instead is a V3 idea (see README "V3 ideas").
 sources:
   - name: WTO
     category: trade

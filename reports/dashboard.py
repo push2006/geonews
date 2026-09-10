@@ -9,7 +9,7 @@ from collections import defaultdict
 from datetime import datetime
 
 from database import recent_articles, upcoming_events, critical_since, category_counts, top_countries
-from config import ARCHIVE_AFTER_DAYS, ENABLE_TELEGRAM_ARCHIVE
+from config import METADATA_CLEANUP_AFTER_DAYS, ENABLE_METADATA_CLEANUP, ENABLE_TELEGRAM_BACKUP
 
 CATEGORY_LABELS = {
     "GEOPOLITICS": "🌍 Geopolitics", "CONFERENCE": "🗓️ Conferences & Meetings",
@@ -141,6 +141,7 @@ def build_dashboard_html():
             cred = a.get("credibility", "MEDIUM")
             cred_color = CRED_COLORS.get(cred, "#a0aec0")
             corrob = a.get("corroboration", 1)
+            telegram_url = a.get("telegram_url", "")
             search_key = html.escape(f"{a.get('title','')} {a.get('source','')} {a.get('country','')}".lower())
             body.append(f"""<div class="item" data-search="{search_key}" style="border-left-color:{risk_color}">
                 <div class="meta">{html.escape(a.get('source','') or '')} &middot;
@@ -153,13 +154,15 @@ def build_dashboard_html():
                 </div>
                 <a href="{html.escape(a.get('url','#'))}" target="_blank">{html.escape(a.get('title',''))}</a>
                 <div class="summary">{html.escape((a.get('summary') or '')[:300])}</div>
+                {f'<div style="margin-top:6px"><a href="{html.escape(telegram_url)}" target="_blank" style="font-size:12px;color:#0088cc">📦 Full record on Telegram ↗</a></div>' if telegram_url else ''}
             </div>""")
     if not articles:
         body.append("<p style='color:#718096;font-size:13px'>No articles collected yet.</p>")
     body.append("</div></div>")
 
-    body.append(f'<p class="footer-note">Showing up to 200 most recent articles. '
-                 f'{"Articles older than " + str(ARCHIVE_AFTER_DAYS) + " days are auto-archived to Telegram." if ENABLE_TELEGRAM_ARCHIVE else "Long-term Telegram archiving is currently off."}</p>')
+    body.append(f'<p class="footer-note">Showing up to 200 most recent articles (metadata from MongoDB; '
+                f'{"full record for each — full summary, all fields — is on Telegram, linked below" if ENABLE_TELEGRAM_BACKUP else "enable ENABLE_TELEGRAM_BACKUP to store full records on Telegram"}). '
+                f'{"Metadata older than " + str(METADATA_CLEANUP_AFTER_DAYS) + " days is periodically cleaned up (full data stays on Telegram)." if ENABLE_METADATA_CLEANUP else "Metadata cleanup is currently off."}</p>')
 
     body.append("""<script>
     function filterArticles() {

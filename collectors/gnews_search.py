@@ -11,9 +11,10 @@ actually matches any term in the group, e.g.:
 from datetime import datetime, timezone
 from config import (GNEWS_LANGUAGE, GNEWS_COUNTRY, GNEWS_PERIOD,
                      GNEWS_MAX_RESULTS, GNEWS_QUERY_GROUPS, DEDUPE_THRESHOLD,
-                     ACTIVE_CATEGORIES)
+                     ACTIVE_CATEGORIES, ENABLE_TELEGRAM_BACKUP)
 from processing.classifier import classify, strip_html
 from processing.dedupe import dedupe_articles
+from reports.telegram_backup import attach_backup_refs
 from database import save_article
 
 try:
@@ -59,15 +60,26 @@ def collect():
             candidates.append({
                 "title": title, "url": link, "source": source,
                 "credibility": "MEDIUM",  # Google News aggregates many publishers; can't rate individually
-                "category": category, "summary": summary[:600],
+                "corroboration": 1,
+                "category": category, "summary": summary,  # kept full here; trimmed only at save time below
                 "published": datetime.now(timezone.utc).isoformat(),
                 "score": score, "risk_level": level, "country": country,
             })
 
     candidates = dedupe_articles(candidates, threshold=DEDUPE_THRESHOLD, score_key="score")
 
+    # Full record -> Telegram (source of truth for complete content).
+    # MongoDB below only keeps a short preview + a link back to this.
+    if ENABLE_TELEGRAM_BACKUP:
+        candidates = attach_backup_refs(candidates)
+
     count = 0
     for art in candidates:
-        if save_article(art):
+        if save_article({
+            **art,
+            "summary": art["summary"][:300],
+            "telegram_message_id": art.get("telegram_message_id"),
+            "telegram_url": art.get("telegram_url", ""),
+        }):
             count += 1
     return count

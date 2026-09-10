@@ -102,15 +102,23 @@ ENABLE_TELEGRAM = os.getenv("ENABLE_TELEGRAM", "false").lower() == "true"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
-# ---------- optional: long-term archive to a Telegram channel ----------
-# Keeps MongoDB's free-tier storage from filling up over a long deployment.
-# Articles older than ARCHIVE_AFTER_DAYS get posted (as text) to a Telegram
-# channel, the summary message is pinned for easy reference, and only THEN
-# are those articles deleted from MongoDB. Uses the same bot as
-# ENABLE_TELEGRAM above; set TELEGRAM_ARCHIVE_CHAT_ID separately if you
-# want the archive in a different channel than the digest (recommended —
-# e.g. a private channel just for this bot). Falls back to TELEGRAM_CHAT_ID
-# if not set.
-ENABLE_TELEGRAM_ARCHIVE = os.getenv("ENABLE_TELEGRAM_ARCHIVE", "false").lower() == "true"
-TELEGRAM_ARCHIVE_CHAT_ID = os.getenv("TELEGRAM_ARCHIVE_CHAT_ID", "") or TELEGRAM_CHAT_ID
-ARCHIVE_AFTER_DAYS = int(os.getenv("ARCHIVE_AFTER_DAYS", "60"))
+# ---------- Telegram = full data storage (every article, in full) ----------
+# This is now the primary full-content store. MongoDB only keeps lightweight
+# metadata (title, score, category, short preview, and a link back to the
+# full Telegram message) — the complete record (full summary/extracted
+# text, all fields) is posted to a dedicated Telegram channel via your bot
+# at collection time, once per collection cycle (batched, to stay well
+# under Telegram's rate limits rather than one message per article).
+# Uses the same bot as ENABLE_TELEGRAM above by default; set
+# TELEGRAM_BACKUP_BOT_TOKEN separately only if you want a different bot.
+ENABLE_TELEGRAM_BACKUP = os.getenv("ENABLE_TELEGRAM_BACKUP", "false").lower() == "true"
+TELEGRAM_BACKUP_BOT_TOKEN = os.getenv("TELEGRAM_BACKUP_BOT_TOKEN", "") or TELEGRAM_BOT_TOKEN
+TELEGRAM_BACKUP_CHAT_ID = os.getenv("TELEGRAM_BACKUP_CHAT_ID", "")
+
+# ---------- optional: periodic Mongo metadata cleanup ----------
+# Since the full record already lives permanently in the Telegram backup
+# channel from the moment it's collected, old MongoDB metadata can simply
+# be deleted (not re-archived) once it's no longer needed for the
+# dashboard/digest — nothing is lost, the full data is already on Telegram.
+ENABLE_METADATA_CLEANUP = os.getenv("ENABLE_METADATA_CLEANUP", "false").lower() == "true"
+METADATA_CLEANUP_AFTER_DAYS = int(os.getenv("METADATA_CLEANUP_AFTER_DAYS", "60"))

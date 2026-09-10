@@ -17,7 +17,15 @@ _db = None
 def connect():
     global _client, _db
     if _db is None:
-        _client = MongoClient(MONGODB_URI)
+        # Explicit timeouts: without these, a bad/unreachable MONGODB_URI
+        # (wrong password, IP not allow-listed in Atlas, typo'd cluster
+        # host) hangs the request for minutes instead of failing fast with
+        # a clear error.
+        _client = MongoClient(
+            MONGODB_URI,
+            serverSelectionTimeoutMS=8000,
+            connectTimeoutMS=8000,
+        )
         _db = _client[MONGODB_DB_NAME]
     return _db
 

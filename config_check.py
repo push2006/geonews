@@ -55,6 +55,24 @@ def check_config(require_email=True):
             "are missing in .env."
         )
 
+    if cfg.ENABLE_TELEGRAM_BACKUP and (not cfg.TELEGRAM_BACKUP_BOT_TOKEN or not cfg.TELEGRAM_BACKUP_CHAT_ID):
+        problems.append(
+            "ENABLE_TELEGRAM_BACKUP=true but TELEGRAM_BACKUP_BOT_TOKEN / "
+            "TELEGRAM_BACKUP_CHAT_ID are missing in .env. Without these, "
+            "collected articles are never backed up to Telegram and "
+            "MongoDB metadata cleanup (if enabled) would delete data with "
+            "no full copy anywhere."
+        )
+
+    if cfg.ENABLE_METADATA_CLEANUP and not cfg.ENABLE_TELEGRAM_BACKUP:
+        problems.append(
+            "ENABLE_METADATA_CLEANUP=true but ENABLE_TELEGRAM_BACKUP=false — "
+            "cleanup permanently deletes MongoDB records on the assumption "
+            "a full copy already exists on Telegram. With backup off, "
+            "enabling cleanup would destroy data with no copy anywhere. "
+            "Turn on ENABLE_TELEGRAM_BACKUP first, or leave cleanup off."
+        )
+
     if problems:
         print("Configuration problem(s) found:\n")
         for p in problems:

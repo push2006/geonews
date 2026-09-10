@@ -7,20 +7,24 @@ and sleeps without traffic).
 
 Routes (all require ?key=TRIGGER_SECRET, except /health):
   GET  /health          -> 200 OK, used to keep the free instance awake
-  POST /collect         -> runs RSS + (optional) Google News + events collection
+  POST /collect         -> runs RSS + (optional) Google News + events
+                            collection. Full records are backed up to
+                            Telegram as part of this step if
+                            ENABLE_TELEGRAM_BACKUP=true.
   POST /send-digest     -> builds the digest and emails it via SMTP directly
   GET  /digest-data     -> returns the digest as JSON (for Apps Script to
                             build and send the email itself via Gmail,
                             avoiding Render's outbound SMTP issues)
   POST /critical        -> checks + sends the instant critical alert
   POST /weekly          -> sends the weekly trend summary
-  GET  /dashboard       -> full browser dashboard: articles, events
-                            calendar, and stats (open this in a browser
-                            with ?key=YOUR_TRIGGER_SECRET on the end)
-  POST /archive-old     -> archives articles older than ARCHIVE_AFTER_DAYS
-                            to a Telegram channel (pinned), then deletes
-                            them from MongoDB — keeps free-tier storage
-                            healthy over a long deployment
+  GET  /dashboard       -> full browser dashboard: articles (with a link to
+                            each one's full Telegram backup record), events
+                            calendar, and stats (open in a browser with
+                            ?key=YOUR_TRIGGER_SECRET on the end)
+  POST /cleanup-old     -> deletes MongoDB metadata older than
+                            METADATA_CLEANUP_AFTER_DAYS. Nothing is lost --
+                            the full record already lives permanently in
+                            the Telegram backup channel from collection time.
 """
 import os
 import logging
@@ -29,7 +33,7 @@ from flask import Flask, request, jsonify, Response
 from config import (ENABLE_GNEWS, EXTRA_RSS_FEEDS, TRIGGER_SECRET,
                      UPCOMING_DAYS, ACTIVE_CATEGORIES,
                      ENABLE_CRITICAL_ALERTS, ENABLE_WEEKLY_REPORT,
-                     ENABLE_TELEGRAM_ARCHIVE)
+                     ENABLE_METADATA_CLEANUP)
 from config_check import check_config
 from database import init_db, recent_articles, upcoming_events
 from collectors.rss import collect as collect_rss
@@ -39,7 +43,7 @@ from reports.email_report import send as send_email_smtp, build_html
 from reports.critical_alert import send_if_critical
 from reports.weekly_report import send as send_weekly
 from reports.dashboard import build_dashboard_html
-from reports.telegram_archive import archive_and_purge
+from reports.metadata_cleanup import cleanup as cleanup_old_metadata
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("web")
@@ -149,17 +153,18 @@ def dashboard():
     return Response(build_dashboard_html(), mimetype="text/html")
 
 
-@app.route("/archive-old", methods=["GET", "POST"])
-def archive_old():
-    """Moves old articles to a Telegram channel and removes them from
-    MongoDB, keeping storage lean over a long-running deployment."""
+@app.route("/cleanup-old", methods=["GET", "POST"])
+def cleanup_old():
+    """Deletes MongoDB metadata older than METADATA_CLEANUP_AFTER_DAYS.
+    Nothing is lost: the full record for every article already lives
+    permanently in the Telegram backup channel from collection time."""
     if not _authorized():
         return jsonify(error="unauthorized"), 401
     if (err := _db_check()):
         return err
-    if not ENABLE_TELEGRAM_ARCHIVE:
-        return jsonify(skipped="ENABLE_TELEGRAM_ARCHIVE is false")
-    result = archive_and_purge()
+    if not ENABLE_METADATA_CLEANUP:
+        return jsonify(skipped="ENABLE_METADATA_CLEANUP is false")
+    result = cleanup_old_metadata()
     return jsonify(result)
 
 

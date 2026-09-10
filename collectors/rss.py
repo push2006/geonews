@@ -3,10 +3,11 @@ from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from config import (MAX_ITEMS_PER_FEED, LOOKBACK_HOURS, ENABLE_FULL_TEXT,
                      FULL_TEXT_MAX_CHARS, FULL_TEXT_WORKERS, DEDUPE_THRESHOLD,
-                     ACTIVE_CATEGORIES)
+                     ACTIVE_CATEGORIES, ENABLE_TELEGRAM_BACKUP)
 from processing.classifier import classify, parse_date, strip_html
 from processing.extract import extract_full_text
 from processing.dedupe import dedupe_articles
+from reports.telegram_backup import attach_backup_refs
 from database import save_article
 
 # Deduplicated source list: major news, official/multilateral bodies,
@@ -68,30 +69,46 @@ def _enrich_with_full_text(articles):
         return list(executor.map(process, articles))
 
 
+def _fetch_feed(feed_spec, cutoff):
+    """Fetch + parse one feed. Isolated so it can run in a worker thread and
+    a single slow/broken source never blocks the others."""
+    source, url, credibility = feed_spec
+    out = []
+    try:
+        feed = feedparser.parse(url)
+        for entry in feed.entries[:MAX_ITEMS_PER_FEED]:
+            title = entry.get("title", "").strip()
+            link = entry.get("link", "").strip()
+            summary = strip_html(entry.get("summary", entry.get("description", "")))
+            if not title or not link:
+                continue
+            published = parse_date(entry.get("published", entry.get("updated", "")))
+            if published < cutoff:
+                continue
+            out.append({
+                "title": title, "url": link, "source": source,
+                "credibility": credibility,
+                "summary": summary, "published": published,
+            })
+    except Exception as exc:
+        print(f"[RSS] {source}: {exc}")
+    return out
+
+
 def collect(extra_feeds=None):
     feeds = DEFAULT_FEEDS + [("Custom", u, "MEDIUM") for u in (extra_feeds or [])]
     cutoff = datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)
 
+    # Feeds are fetched concurrently, not one-by-one. With ~28 sources and a
+    # REQUEST_TIMEOUT-driven worst case per feed, a sequential loop could
+    # take several minutes and blow past gunicorn's request timeout when
+    # this runs behind /collect on Render. Threaded fetch keeps a full
+    # collection cycle to roughly the slowest single feed instead of the
+    # sum of all of them.
     candidates = []
-    for source, url, credibility in feeds:
-        try:
-            feed = feedparser.parse(url)
-            for entry in feed.entries[:MAX_ITEMS_PER_FEED]:
-                title = entry.get("title", "").strip()
-                link = entry.get("link", "").strip()
-                summary = strip_html(entry.get("summary", entry.get("description", "")))
-                if not title or not link:
-                    continue
-                published = parse_date(entry.get("published", entry.get("updated", "")))
-                if published < cutoff:
-                    continue
-                candidates.append({
-                    "title": title, "url": link, "source": source,
-                    "credibility": credibility,
-                    "summary": summary, "published": published,
-                })
-        except Exception as exc:
-            print(f"[RSS] {source}: {exc}")
+    with ThreadPoolExecutor(max_workers=min(12, len(feeds) or 1)) as executor:
+        for result in executor.map(lambda f: _fetch_feed(f, cutoff), feeds):
+            candidates.extend(result)
 
     candidates = _enrich_with_full_text(candidates)
 
@@ -104,16 +121,25 @@ def collect(extra_feeds=None):
         art["category"], art["score"], art["risk_level"], art["country"] = category, score, level, country
 
     candidates = dedupe_articles(candidates, threshold=DEDUPE_THRESHOLD, score_key="score")
+    candidates = [a for a in candidates if a["category"] in ACTIVE_CATEGORIES]
+
+    # Full record -> Telegram (source of truth for complete content).
+    # MongoDB below only keeps a short preview + a link back to this.
+    if ENABLE_TELEGRAM_BACKUP:
+        candidates = attach_backup_refs(candidates)
 
     count = 0
     for art in candidates:
-        if art["category"] not in ACTIVE_CATEGORIES:
-            continue
         if save_article({
             "title": art["title"], "url": art["url"], "source": art["source"],
             "credibility": art.get("credibility", "MEDIUM"),
             "corroboration": art.get("corroboration", 1),
-            "category": art["category"], "summary": art["summary"][:600],
+            "category": art["category"],
+            # Short preview only -- full text lives in the Telegram backup
+            # message (telegram_url below), not duplicated here.
+            "summary": art["summary"][:300],
+            "telegram_message_id": art.get("telegram_message_id"),
+            "telegram_url": art.get("telegram_url", ""),
             "published": art["published"].isoformat(), "score": art["score"],
             "risk_level": art["risk_level"], "country": art["country"],
         }):
