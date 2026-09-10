@@ -16,7 +16,19 @@
  *       DIGEST_TIMES               -> comma-separated "HH:MM" list, e.g.
  *                                      "08:00,13:30,20:00" — as many as
  *                                      you want, any times you want.
- *                                      Default if unset: "10:00,22:00"
+ *                                      Default if unset: "10:00,22:00".
+ *                                      IGNORED if DIGEST_INTERVAL_HOURS is set.
+ *       DIGEST_INTERVAL_HOURS       -> send the digest every N hours instead
+ *                                      of at fixed clock times, e.g. "1" for
+ *                                      hourly. Allowed values: 1, 2, 4, 6, 8,
+ *                                      12 (Apps Script's own restriction on
+ *                                      hourly triggers). Uses ONE trigger
+ *                                      instead of one-per-time, so this is
+ *                                      the right way to do "every hour" --
+ *                                      listing 24 DIGEST_TIMES entries would
+ *                                      blow past Apps Script's 20-triggersper-project limit once combined with keepAlive/runCollect/etc. Unset
+ *                                      by default -- DIGEST_TIMES is used
+ *                                      unless you set this.
  *       WEEKLY_DAY                 -> default MONDAY (MONDAY..SUNDAY)
  *       WEEKLY_TIME                -> default 09:00
  *       CLEANUP_DAY_OF_MONTH       -> default 1
@@ -126,6 +138,17 @@ function sendDigest() {
   // Explicit UTF-8 decode — without this, emoji and other multi-byte
   // characters in the digest get corrupted into "������" garbage text.
   const data = JSON.parse(resp.getContentText('UTF-8'));
+
+  // At an hourly (or otherwise frequent) cadence, most cycles will have
+  // nothing new. Skip sending an empty "No items this cycle" email rather
+  // than filling the inbox — only skip if there's also nothing critical to
+  // flag. Remove this block if you'd rather always get a "still nothing new"
+  // email as a heartbeat.
+  if ((!data.article_ids || data.article_ids.length === 0) && !(data.critical_count > 0)) {
+    Logger.log('sendDigest: nothing new this cycle, skipped sending.');
+    return;
+  }
+
   const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd MMM yyyy HH:mm');
   const subject = '🌍 Geo Intel Brief — ' + today +
       (data.critical_count > 0 ? '  ⚠️ ' + data.critical_count + ' CRITICAL' : '');
@@ -201,6 +224,7 @@ function setupTriggers() {
   const keepAliveMin = _readInt('KEEPALIVE_INTERVAL_MIN', 10);
   const collectMin = _readInt('COLLECT_INTERVAL_MIN', 30);
   const criticalMin = _readInt('CRITICAL_CHECK_INTERVAL_MIN', 30);
+  const digestIntervalHours = _readInt('DIGEST_INTERVAL_HOURS', 0); // 0 = unset -> use DIGEST_TIMES instead
   const digestTimes = _readDigestTimes();
   const weeklyDay = _readWeekDay('WEEKLY_DAY', 'MONDAY');
   const weeklyTime = _readTime('WEEKLY_TIME', '09:00');
@@ -213,12 +237,25 @@ function setupTriggers() {
   // 2. Actual collection job (this is also when Telegram backup happens).
   ScriptApp.newTrigger('runCollect').timeBased().everyMinutes(collectMin).create();
 
-  // 3. Digest email(s) — one trigger per time in DIGEST_TIMES. Set as many
-  //    or as few, at whatever times you want, via that Script Property.
-  digestTimes.forEach(t => {
-    ScriptApp.newTrigger('sendDigest').timeBased()
-        .atHour(t.hour).nearMinute(t.minute).everyDays(1).create();
-  });
+  // 3. Digest email(s). Two mutually exclusive modes:
+  //    - DIGEST_INTERVAL_HOURS set -> ONE recurring trigger, e.g. every 1
+  //      hour. This is the correct way to do "hourly digests" -- it uses a
+  //      single trigger no matter the frequency, instead of one trigger per
+  //      clock time (which would blow past Apps Script's 20-trigger limit
+  //      for anything more than a handful of times).
+  //    - otherwise -> one trigger per entry in DIGEST_TIMES, at those exact
+  //      clock times, same as before.
+  let digestScheduleDesc;
+  if (digestIntervalHours > 0) {
+    ScriptApp.newTrigger('sendDigest').timeBased().everyHours(digestIntervalHours).create();
+    digestScheduleDesc = `every ${digestIntervalHours}h (DIGEST_INTERVAL_HOURS)`;
+  } else {
+    digestTimes.forEach(t => {
+      ScriptApp.newTrigger('sendDigest').timeBased()
+          .atHour(t.hour).nearMinute(t.minute).everyDays(1).create();
+    });
+    digestScheduleDesc = `at [${digestTimes.map(t => `${t.hour}:${('0'+t.minute).slice(-2)}`).join(', ')}] (DIGEST_TIMES)`;
+  }
 
   // 4. Critical alert check.
   ScriptApp.newTrigger('checkCritical').timeBased().everyMinutes(criticalMin).create();
@@ -231,9 +268,8 @@ function setupTriggers() {
   ScriptApp.newTrigger('cleanupOld').timeBased()
       .onMonthDay(cleanupDay).atHour(cleanupTime.hour).nearMinute(cleanupTime.minute).create();
 
-  const timesStr = digestTimes.map(t => `${t.hour}:${('0'+t.minute).slice(-2)}`).join(', ');
   Logger.log(`Triggers installed: keep-alive/${keepAliveMin}min, collect/${collectMin}min, ` +
-      `critical-check/${criticalMin}min, digests at [${timesStr}], ` +
+      `critical-check/${criticalMin}min, digests ${digestScheduleDesc}, ` +
       `weekly on day ${weeklyDay} at ${weeklyTime.hour}:${weeklyTime.minute}, ` +
       `cleanup monthly on day ${cleanupDay} at ${cleanupTime.hour}:${cleanupTime.minute}.`);
 }
