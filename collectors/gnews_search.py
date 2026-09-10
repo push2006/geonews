@@ -15,7 +15,7 @@ from config import (GNEWS_LANGUAGE, GNEWS_COUNTRY, GNEWS_PERIOD,
 from processing.classifier import classify, strip_html
 from processing.dedupe import dedupe_articles
 from reports.telegram_backup import attach_backup_refs
-from database import save_article
+from database import save_articles_bulk
 
 try:
     from gnews import GNews
@@ -73,13 +73,13 @@ def collect():
     if ENABLE_TELEGRAM_BACKUP:
         candidates = attach_backup_refs(candidates)
 
-    count = 0
-    for art in candidates:
-        if save_article({
-            **art,
-            "summary": art["summary"][:300],
-            "telegram_message_id": art.get("telegram_message_id"),
-            "telegram_url": art.get("telegram_url", ""),
-        }):
-            count += 1
-    return count
+    # One bulk write instead of one insert_one() round-trip per article --
+    # same reasoning as collectors/rss.py.
+    docs = [{
+        **art,
+        "summary": art["summary"][:300],
+        "telegram_message_id": art.get("telegram_message_id"),
+        "telegram_url": art.get("telegram_url", ""),
+    } for art in candidates]
+
+    return save_articles_bulk(docs)
