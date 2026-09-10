@@ -14,9 +14,16 @@ EXTRA_RSS_FEEDS = [x.strip() for x in os.getenv("EXTRA_RSS_FEEDS", "").split(","
 # Which categories actually get saved/emailed. The classifier still tags
 # everything (GEOPOLITICS, CONFERENCE, TRADE, SANCTIONS, RISK, RESEARCH,
 # GENERAL), but only categories listed here pass through into the digest.
-# Default narrowed to trade activity + sanctions/circulars + research papers.
+# Default is ALL categories -- a "Global Geopolitical Intelligence" brief
+# that only ever showed TRADE/SANCTIONS/RESEARCH (the old default) is why
+# most cycles showed "0 relevant items": real-world RSS output skews
+# GEOPOLITICS/CONFERENCE/RISK, and those were being silently filtered out
+# in collectors/rss.py BEFORE anything reached MongoDB. Narrow this back
+# down via the ACTIVE_CATEGORIES env var on Render if you only want a
+# subset (e.g. "TRADE,SANCTIONS,RESEARCH").
 ACTIVE_CATEGORIES = [c.strip().upper() for c in
-                      os.getenv("ACTIVE_CATEGORIES", "TRADE,SANCTIONS,RESEARCH").split(",")
+                      os.getenv("ACTIVE_CATEGORIES",
+                                "GEOPOLITICS,CONFERENCE,TRADE,SANCTIONS,RISK,RESEARCH,GENERAL").split(",")
                       if c.strip()]
 
 # Fuzzy near-duplicate filtering (0-1, higher = stricter match required).
@@ -111,7 +118,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 # under Telegram's rate limits rather than one message per article).
 # Uses the same bot as ENABLE_TELEGRAM above by default; set
 # TELEGRAM_BACKUP_BOT_TOKEN separately only if you want a different bot.
-ENABLE_TELEGRAM_BACKUP = os.getenv("ENABLE_TELEGRAM_BACKUP", "false").lower() == "true"
+ENABLE_TELEGRAM_BACKUP = os.getenv("ENABLE_TELEGRAM_BACKUP", "true").lower() == "true"
 TELEGRAM_BACKUP_BOT_TOKEN = os.getenv("TELEGRAM_BACKUP_BOT_TOKEN", "") or TELEGRAM_BOT_TOKEN
 TELEGRAM_BACKUP_CHAT_ID = os.getenv("TELEGRAM_BACKUP_CHAT_ID", "")
 

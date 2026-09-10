@@ -133,6 +133,23 @@ function sendDigest() {
   GmailApp.sendEmail(emailTo, subject, 'This email requires HTML support.', {
     htmlBody: data.html,
   });
+
+  // Only tell Render to mark these articles as "sent" AFTER the Gmail send
+  // above didn't throw. If this step is skipped (e.g. quota error), the
+  // same articles just get included again in the next digest instead of
+  // silently vanishing.
+  if (data.article_ids && data.article_ids.length) {
+    try {
+      UrlFetchApp.fetch(_renderUrl('/mark-emailed'), {
+        method: 'post',
+        contentType: 'application/json',
+        payload: JSON.stringify({ article_ids: data.article_ids }),
+        muteHttpExceptions: true,
+      });
+    } catch (e) {
+      Logger.log('mark-emailed failed (articles will just repeat next digest): ' + e);
+    }
+  }
 }
 
 /** Checks for CRITICAL items and sends an instant alert if found. Runs every

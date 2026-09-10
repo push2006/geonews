@@ -39,7 +39,7 @@ from database import init_db, recent_articles, upcoming_events
 from collectors.rss import collect as collect_rss
 from collectors.gnews_search import collect as collect_gnews
 from collectors.events import seed_events
-from reports.email_report import send as send_email_smtp, build_html
+from reports.email_report import send as send_email_smtp, build_html, build_digest, mark_sent
 from reports.critical_alert import send_if_critical
 from reports.weekly_report import send as send_weekly
 from reports.dashboard import build_dashboard_html
@@ -108,16 +108,39 @@ def send_digest():
 
 @app.route("/digest-data")
 def digest_data():
-    """Returns the same digest as raw HTML, for Apps Script to send via
-    GmailApp instead of Render's SMTP."""
+    """Returns the digest as raw HTML, for Apps Script to send via GmailApp
+    instead of Render's SMTP. Does NOT mark articles as sent here -- that
+    only happens once Apps Script confirms GmailApp.sendEmail actually
+    succeeded, via a follow-up call to /mark-emailed. This is what stops
+    articles disappearing from every future digest if the Gmail send fails
+    after this call (e.g. Gmail daily quota, bad EMAIL_TO address)."""
     if not _authorized():
         return jsonify(error="unauthorized"), 401
     if (err := _db_check()):
         return err
-    html_content = build_html()
-    articles = recent_articles()
-    critical_count = sum(1 for a in articles if a.get("risk_level") == "CRITICAL")
-    return jsonify(html=html_content, critical_count=critical_count)
+    html_content, critical_count, article_ids = build_digest()
+    return jsonify(html=html_content, critical_count=critical_count,
+                    article_ids=[str(i) for i in article_ids])
+
+
+@app.route("/mark-emailed", methods=["POST"])
+def mark_emailed_route():
+    """Apps Script calls this right after GmailApp.sendEmail succeeds,
+    passing back the article_ids it got from /digest-data. Only then do
+    those articles stop appearing in future digests."""
+    if not _authorized():
+        return jsonify(error="unauthorized"), 401
+    if (err := _db_check()):
+        return err
+    from bson import ObjectId
+    ids = request.get_json(silent=True) or {}
+    raw_ids = ids.get("article_ids", [])
+    try:
+        object_ids = [ObjectId(i) for i in raw_ids]
+    except Exception:
+        return jsonify(error="invalid article_ids"), 400
+    mark_sent(object_ids)
+    return jsonify(marked=len(object_ids))
 
 
 @app.route("/critical", methods=["GET", "POST"])

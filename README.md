@@ -4,6 +4,41 @@ Python + MongoDB monitor for trade activity, sanctions/circulars, and
 research papers, with automated HTML email, a browser dashboard, and
 24/7 cloud deployment (Render + MongoDB Atlas + Google Apps Script).
 
+## Changelog — Sept 2026 deployment fixes (post-manual)
+
+These three changes were made **after** the `Geo_Intel_Monitor_V2_Manual.pdf`
+was written, on top of that manual's Chapter 2 audit. Nothing else in this
+package changed from the manual's description — collection, scoring,
+classification, and dedupe logic are untouched. Same format as the manual's
+own audit table for consistency:
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | `ACTIVE_CATEGORIES` defaulted to `TRADE,SANCTIONS,RESEARCH` only. Real-world RSS output skews GEOPOLITICS/CONFERENCE/RISK, so a fresh deploy with the documented default routinely showed "0 relevant items" every cycle even while collection was working correctly. | Default widened to all seven categories: `GEOPOLITICS,CONFERENCE,TRADE,SANCTIONS,RISK,RESEARCH,GENERAL` (`config.py`, `.env.example`). **This is a default only** — set `ACTIVE_CATEGORIES` explicitly in Render's environment variables to narrow it back down to whatever subset you actually want. |
+| 2 | `/digest-data` and the direct-SMTP `send()` path both marked articles `emailed: true` the moment the HTML was *built* — before confirming the email actually sent. A failed Gmail/SMTP send (quota, bad address, network blip) meant those articles silently vanished from every future digest despite never reaching an inbox, with no error visible anywhere. | `reports/email_report.py` now exposes `build_digest()` (returns html + article ids, marks nothing) and `mark_sent(ids)` (marks, called only after a confirmed send). `send()` now marks only after `sendmail()` returns without raising. Added `web.py` route `POST /mark-emailed` and updated `apps_script/Code.gs`'s `sendDigest()` to call it right after `GmailApp.sendEmail()` succeeds — so a failed send just means those articles repeat in the next digest instead of disappearing. `build_html()` is kept as a backwards-compatible wrapper (same old immediate-mark behavior) for `app.py`/`scheduler.py`, which send synchronously in one call anyway. |
+| 3 | Mojibake (`♦♦♦♦♦♦`) in place of emoji in subject lines and digest headers. | Root cause: a stale/previous version of `apps_script/Code.gs` was still live in the Apps Script project (not a code bug in this bundle — `getContentText('UTF-8')` plus Flask's ASCII-safe `jsonify` already handle this correctly). **Action needed on your end:** fully replace the live Apps Script project's `Code.gs` with the one in this package and redeploy — editing in place isn't enough since Apps Script doesn't diff/merge, it just keeps whatever was last saved there. |
+
+### Updated data-loss-safe email flow (supersedes manual section 7.1's description)
+
+```
+/digest-data (GET)                    Apps Script sendDigest()
+  build_digest()                         GmailApp.sendEmail(...)
+  -> html, critical_count,               |
+     article_ids  ----response------->   | (only if send did NOT throw)
+                                          v
+                                     POST /mark-emailed
+                                       {article_ids: [...]}
+                                          |
+                                          v
+                                     mark_sent(article_ids)
+                                       -> only NOW flagged emailed:true
+```
+
+If `GmailApp.sendEmail()` throws, `Code.gs` never calls `/mark-emailed`, so
+those same articles are simply included again in the next digest — safer
+than the old behavior, at the cost of an occasional repeat instead of a
+silent loss.
+
 ## Two ways to run this
 
 | | Local (`scheduler.py`) | Cloud (Render + Apps Script) |

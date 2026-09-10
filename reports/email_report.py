@@ -61,11 +61,16 @@ def _section_html(category, items):
     return "".join(rows)
 
 
-def build_html(mark_as_sent=True):
+def build_digest():
     """Builds the digest HTML from articles not yet included in a previous
-    digest. By default also marks them as sent, so the next call (the next
-    scheduled digest) won't repeat the same stories. Pass
-    mark_as_sent=False to preview without consuming the queue."""
+    digest. Returns (html, critical_count, article_ids) but does NOT mark
+    anything as sent -- that only happens once the caller has confirmed the
+    email actually went out (see mark_sent() below). This is what prevents
+    articles from silently vanishing if a send fails partway through: the
+    old behaviour marked articles "emailed" the moment the HTML was built,
+    even if the send afterwards failed, so a dropped SMTP/Gmail send meant
+    those stories were gone from every future digest despite never having
+    reached anyone's inbox."""
     articles = unemailed_articles()
     events = upcoming_events(UPCOMING_DAYS)
     grouped = _group_articles(articles)
@@ -115,10 +120,25 @@ def build_html(mark_as_sent=True):
     </td></tr>
     </table></td></tr></table></body></html>""")
 
-    if mark_as_sent and articles:
-        mark_emailed([a["_id"] for a in articles])
+    return "".join(body), critical_count, [a["_id"] for a in articles]
 
-    return "".join(body)
+
+def mark_sent(article_ids):
+    """Call this ONLY after the email has actually, successfully been sent
+    (SMTP accepted it / Gmail send didn't throw). Safe to call with an
+    empty list."""
+    mark_emailed(article_ids)
+
+
+def build_html(mark_as_sent=True):
+    """Backwards-compatible wrapper around build_digest() for callers (CLI,
+    scheduler.py) that just want the HTML string back and are fine with the
+    old immediate-mark behaviour. New code (web.py) should use build_digest()
+    + mark_sent() directly so marking only happens after a confirmed send."""
+    html_content, _critical_count, article_ids = build_digest()
+    if mark_as_sent and article_ids:
+        mark_sent(article_ids)
+    return html_content
 
 
 def _archive(html_content):
@@ -136,7 +156,7 @@ def send():
     if not all([EMAIL_FROM, EMAIL_TO, EMAIL_APP_PASSWORD]):
         raise RuntimeError("Set EMAIL_FROM, EMAIL_TO and EMAIL_APP_PASSWORD in .env")
 
-    html_content = build_html()
+    html_content, _critical_count, article_ids = build_digest()
     _archive(html_content)
 
     today = datetime.now().strftime("%d %b %Y")
@@ -150,3 +170,8 @@ def send():
     with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context) as server:
         server.login(EMAIL_FROM, EMAIL_APP_PASSWORD)
         server.sendmail(EMAIL_FROM, [addr.strip() for addr in EMAIL_TO.split(",")], msg.as_string())
+
+    # Only mark articles as "sent" once sendmail() above didn't raise --
+    # so a failed send leaves them queued for the next attempt instead of
+    # silently disappearing.
+    mark_sent(article_ids)
