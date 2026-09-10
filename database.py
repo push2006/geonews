@@ -7,7 +7,7 @@ dicts (a["title"], a["score"], ...) exactly like the old sqlite3.Row did.
 """
 from datetime import datetime, timedelta, timezone
 from pymongo import MongoClient, ASCENDING, DESCENDING
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, BulkWriteError
 from config import MONGODB_URI, MONGODB_DB_NAME
 
 _client = None
@@ -51,6 +51,33 @@ def save_article(a):
         return True
     except DuplicateKeyError:
         return False
+
+
+def save_articles_bulk(articles):
+    """Inserts many articles in ONE round-trip to MongoDB instead of one
+    insert_one() call per article -- this is what collectors/rss.py uses
+    now, since sequential per-article round-trips were the slowest step in
+    a collection cycle once feed fetching was already threaded (each
+    round-trip pays full network latency to Atlas). ordered=False means
+    Mongo keeps inserting the rest of the batch even after hitting a
+    duplicate url, instead of stopping at the first one -- so a batch of
+    30 articles where 5 are already-seen duplicates still saves the other
+    25 in this same single call. Returns the count of articles actually
+    inserted (duplicates don't count, same semantics as calling
+    save_article() in a loop)."""
+    if not articles:
+        return 0
+    db = connect()
+    for doc in articles:
+        doc.setdefault("created_at", _now_iso())
+    try:
+        result = db.articles.insert_many(articles, ordered=False)
+        return len(result.inserted_ids)
+    except BulkWriteError as bwe:
+        # Some documents inserted, some failed (almost always duplicate
+        # urls colliding with the unique index) -- count is total attempted
+        # minus how many actually errored out.
+        return len(articles) - len(bwe.details.get("writeErrors", []))
 
 
 def save_event(e):
