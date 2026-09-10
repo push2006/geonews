@@ -9,7 +9,8 @@ from processing.classifier import classify, parse_date, strip_html
 from processing.extract import extract_full_text
 from processing.dedupe import dedupe_articles
 from reports.telegram_backup import attach_backup_refs
-from database import save_articles_bulk
+from database import save_articles_bulk, update_telegram_refs
+import threading
 
 # Deduplicated source list: major news, official/multilateral bodies,
 # think-tank & academic research feeds, and sanctions/trade-law trackers.
@@ -142,29 +143,41 @@ def collect(extra_feeds=None):
     candidates = dedupe_articles(candidates, threshold=DEDUPE_THRESHOLD, score_key="score")
     candidates = [a for a in candidates if a["category"] in ACTIVE_CATEGORIES]
 
-    # Full record -> Telegram (source of truth for complete content).
-    # MongoDB below only keeps a short preview + a link back to this.
-    if ENABLE_TELEGRAM_BACKUP:
-        candidates = attach_backup_refs(candidates)
-
-    # One bulk MongoDB write instead of one insert_one() round-trip per
-    # article. With Atlas typically being a network hop away from Render,
-    # N sequential round-trips (each paying full network latency) was the
-    # slowest part of collection once feed fetching was already threaded --
-    # a 20-article cycle meant 20 sequential round-trips. Duplicate URLs
-    # (already-seen articles) are still silently skipped, same as before.
+    # MongoDB write happens FIRST and is what /collect waits for -- this is
+    # the fast path (one bulk round-trip). Telegram backup used to run
+    # synchronously right here before this fix, which could push a single
+    # /collect request past Render's own reverse-proxy timeout (separate
+    # from and not fixable via gunicorn's --timeout) whenever several
+    # message batches were needed or Telegram was slow to respond -- that
+    # was causing 502 Bad Gateway on every /collect call. Telegram backup
+    # now happens in a background thread AFTER this function has already
+    # returned its result to the caller, so /collect's response time is no
+    # longer coupled to Telegram's latency at all.
     docs = [{
         "title": art["title"], "url": art["url"], "source": art["source"],
         "credibility": art.get("credibility", "MEDIUM"),
         "corroboration": art.get("corroboration", 1),
         "category": art["category"],
         # Short preview only -- full text lives in the Telegram backup
-        # message (telegram_url below), not duplicated here.
+        # message (telegram_url below, filled in later by the background
+        # thread), not duplicated here.
         "summary": art["summary"][:300],
-        "telegram_message_id": art.get("telegram_message_id"),
-        "telegram_url": art.get("telegram_url", ""),
+        "telegram_message_id": None,
+        "telegram_url": "",
         "published": art["published"].isoformat(), "score": art["score"],
         "risk_level": art["risk_level"], "country": art["country"],
     } for art in candidates]
 
-    return save_articles_bulk(docs)
+    saved_count = save_articles_bulk(docs)
+
+    if ENABLE_TELEGRAM_BACKUP and candidates:
+        def _backup_in_background(arts):
+            try:
+                backed_up = attach_backup_refs(arts)
+                update_telegram_refs(backed_up)
+            except Exception as exc:
+                print(f"[TELEGRAM BACKUP] background thread error: {exc}")
+
+        threading.Thread(target=_backup_in_background, args=(candidates,), daemon=True).start()
+
+    return saved_count
