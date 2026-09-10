@@ -80,6 +80,27 @@ def save_articles_bulk(articles):
         return len(articles) - len(bwe.details.get("writeErrors", []))
 
 
+def update_telegram_refs(articles):
+    """Attaches telegram_message_id/telegram_url to already-saved articles,
+    matched by url. Used by the background Telegram-backup thread (see
+    collectors/rss.py) so that posting to Telegram never has to happen
+    before /collect can respond -- this runs afterward, in the background,
+    and just patches the docs once Telegram confirms the post. Safe to
+    call with articles that have no telegram_url yet (skipped)."""
+    db = connect()
+    updated = 0
+    for a in articles:
+        if not a.get("telegram_url"):
+            continue
+        result = db.articles.update_one(
+            {"url": a["url"]},
+            {"$set": {"telegram_message_id": a.get("telegram_message_id"),
+                      "telegram_url": a.get("telegram_url")}},
+        )
+        updated += result.modified_count
+    return updated
+
+
 def save_event(e):
     db = connect()
     doc = dict(e)
