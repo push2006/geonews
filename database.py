@@ -112,10 +112,32 @@ def save_event(e):
         return False
 
 
-def recent_articles(limit=60):
+def recent_articles(limit=60, sort_by="score"):
     db = connect()
-    cur = db.articles.find().sort([("score", DESCENDING), ("published", DESCENDING)]).limit(limit)
+    sort_spec = {
+        "score": [("score", DESCENDING), ("published", DESCENDING)],
+        "newest": [("published", DESCENDING)],
+        "title": [("title", ASCENDING)],
+    }.get(sort_by, [("score", DESCENDING), ("published", DESCENDING)])
+    cur = db.articles.find().sort(sort_spec).limit(limit)
     return list(cur)
+
+
+def total_article_count():
+    """Total documents in the articles collection, ignoring any limit --
+    used so the dashboard can show 'X shown of Y total' instead of quietly
+    capping the count with no indication more data exists."""
+    db = connect()
+    return db.articles.count_documents({})
+
+
+def latest_collection_time():
+    """created_at of the single most recently saved article -- used for a
+    'last collected' stat on the dashboard so it's obvious at a glance
+    whether /collect is still running on schedule."""
+    db = connect()
+    doc = db.articles.find_one(sort=[("created_at", DESCENDING)])
+    return doc.get("created_at") if doc else None
 
 
 def unemailed_articles(limit=60):
