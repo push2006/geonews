@@ -17,17 +17,22 @@ Routes (all require ?key=TRIGGER_SECRET, except /health):
                             avoiding Render's outbound SMTP issues)
   POST /critical        -> checks + sends the instant critical alert
   POST /weekly          -> sends the weekly trend summary
-  GET  /dashboard       -> full browser dashboard: articles (with a link to
-                            each one's full Telegram backup record), events
+  GET  /dashboard       -> full browser dashboard: every saved article
+                            (full record, not just metadata), events
                             calendar, and stats (open in a browser with
                             ?key=YOUR_TRIGGER_SECRET on the end)
+  GET  /export.csv      -> downloads every article as a CSV file
   POST /cleanup-old     -> deletes MongoDB metadata older than
                             METADATA_CLEANUP_AFTER_DAYS. Nothing is lost --
                             the full record already lives permanently in
                             the Telegram backup channel from collection time.
 """
 import os
+import io
+import csv
+import threading
 import logging
+from datetime import datetime, timezone
 from flask import Flask, request, jsonify, Response
 
 from config import (ENABLE_GNEWS, EXTRA_RSS_FEEDS, TRIGGER_SECRET,
@@ -76,6 +81,39 @@ def _authorized():
     return request.args.get("key") == TRIGGER_SECRET
 
 
+# Background job state for /collect. Collection (RSS + Google News +
+# Telegram backup) can take longer than gunicorn's/Render's request
+# timeout, so /collect now kicks the work off in a background thread and
+# returns immediately instead of blocking the HTTP request until it's
+# done. Poll /collect-status to see progress and the final result.
+_collect_status = {
+    "running": False,
+    "last_started": None,
+    "last_finished": None,
+    "last_result": None,
+}
+_collect_lock = threading.Lock()
+
+
+def _run_collect_job():
+    try:
+        new_rss = collect_rss(EXTRA_RSS_FEEDS)
+        new_gnews = collect_gnews() if ENABLE_GNEWS else 0
+        new_events = seed_events()
+        _collect_status["last_result"] = {
+            "new_rss_articles": new_rss,
+            "new_gnews_articles": new_gnews,
+            "new_events": new_events,
+            "error": None,
+        }
+    except Exception as exc:
+        log.exception("Background /collect job failed")
+        _collect_status["last_result"] = {"error": str(exc)}
+    finally:
+        _collect_status["running"] = False
+        _collect_status["last_finished"] = datetime.now(timezone.utc).isoformat()
+
+
 @app.route("/health")
 def health():
     return jsonify(status="ok")
@@ -87,10 +125,22 @@ def collect():
         return jsonify(error="unauthorized"), 401
     if (err := _db_check()):
         return err
-    new_rss = collect_rss(EXTRA_RSS_FEEDS)
-    new_gnews = collect_gnews() if ENABLE_GNEWS else 0
-    new_events = seed_events()
-    return jsonify(new_rss_articles=new_rss, new_gnews_articles=new_gnews, new_events=new_events)
+    with _collect_lock:
+        if _collect_status["running"]:
+            return jsonify(status="already_running",
+                            started=_collect_status["last_started"]), 202
+        _collect_status["running"] = True
+        _collect_status["last_started"] = datetime.now(timezone.utc).isoformat()
+    threading.Thread(target=_run_collect_job, daemon=True).start()
+    return jsonify(status="started",
+                    note="Collection runs in the background now -- poll /collect-status for the result."), 202
+
+
+@app.route("/collect-status")
+def collect_status():
+    if not _authorized():
+        return jsonify(error="unauthorized"), 401
+    return jsonify(_collect_status)
 
 
 @app.route("/send-digest", methods=["GET", "POST"])
@@ -173,7 +223,36 @@ def dashboard():
         return "Unauthorized — add ?key=YOUR_TRIGGER_SECRET to the URL.", 401
     if (err := _db_check()):
         return err
-    return Response(build_dashboard_html(), mimetype="text/html")
+    limit = request.args.get("limit", default=100000, type=int)
+    category = request.args.get("category") or None
+    sort_by = request.args.get("sort_by", default="score")
+    html_out = build_dashboard_html(limit=limit, category=category, trigger_key=TRIGGER_SECRET, sort_by=sort_by)
+    return Response(html_out, mimetype="text/html")
+
+
+@app.route("/export.csv")
+def export_csv():
+    """Downloads every article in MongoDB as a CSV file -- a portable full
+    backup you can keep locally, independent of both the dashboard view
+    and the Telegram archive. Pass &category=X to export just one category."""
+    if not _authorized():
+        return jsonify(error="unauthorized"), 401
+    if (err := _db_check()):
+        return err
+    category = request.args.get("category") or None
+    articles = recent_articles(limit=1000000)
+    if category:
+        articles = [a for a in articles if (a.get("category") or "GENERAL") == category]
+    buf = io.StringIO()
+    fields = ["title", "source", "category", "risk_level", "score", "credibility",
+              "country", "corroboration", "published", "created_at", "url", "summary"]
+    writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for a in articles:
+        writer.writerow(a)
+    fname = f"geonews_export{'_' + category if category else ''}.csv"
+    return Response(buf.getvalue(), mimetype="text/csv",
+                     headers={"Content-Disposition": f"attachment; filename={fname}"})
 
 
 @app.route("/cleanup-old", methods=["GET", "POST"])
