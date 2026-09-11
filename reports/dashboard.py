@@ -8,7 +8,7 @@ import html
 from collections import defaultdict
 from datetime import datetime
 
-from database import recent_articles, upcoming_events, critical_since, category_counts, top_countries
+from database import recent_articles, upcoming_events, critical_since, category_counts, top_countries, total_article_count, latest_collection_time
 from config import METADATA_CLEANUP_AFTER_DAYS, ENABLE_METADATA_CLEANUP, ENABLE_TELEGRAM_BACKUP
 
 CATEGORY_LABELS = {
@@ -69,8 +69,12 @@ def _bar_section(title, rows, max_val):
     return "".join(out)
 
 
-def build_dashboard_html():
-    articles = recent_articles(limit=200)
+def build_dashboard_html(limit=100000, category=None, trigger_key=None, sort_by="score"):
+    total_in_db = total_article_count()
+    last_collected = latest_collection_time()
+    articles = recent_articles(limit=limit, sort_by=sort_by)
+    if category:
+        articles = [a for a in articles if (a.get("category") or "GENERAL") == category]
     events = upcoming_events(120)
     critical = critical_since(24)
     cats = category_counts(7)
@@ -78,6 +82,7 @@ def build_dashboard_html():
 
     max_cat = max((c["cnt"] for c in cats), default=1)
     now = datetime.now().strftime("%d %b %Y, %H:%M")
+    key_param = f"&key={trigger_key}" if trigger_key else ""
 
     # Risk-level breakdown (from the currently loaded article set)
     risk_counts = defaultdict(int)
@@ -95,16 +100,30 @@ def build_dashboard_html():
     body = [f"""<!DOCTYPE html><html><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Geo Intel Dashboard</title><style>{BASE_CSS}</style></head><body><div class="wrap">
-    <header><h1>🌍 Geo Intel Monitor — Dashboard</h1><p>Last refreshed {now}</p></header>
+    <header><h1>🌍 Geo Intel Monitor — Dashboard</h1><p>Last refreshed {now} &middot; Last article collected: {html.escape((last_collected or "never")[:16].replace("T", " "))} UTC</p></header>
     <div class="stats">
-        {_stat(len(articles), "Articles (recent)")}
+        {_stat(f"{len(articles)} / {total_in_db}", "Articles shown / total in DB")}
         {_stat(len(critical), "Critical (24h)")}
         {_stat(len(events), "Upcoming events")}
         {_stat(len(cats), "Active categories")}
     </div>
 
     <input type="text" class="searchbox" id="searchBox" placeholder="🔎 Filter articles by title, source, or country..." onkeyup="filterArticles()">
+    <p style="margin:-8px 0 16px;display:flex;justify-content:space-between;align-items:center">
+        <a href="/export.csv{('?key=' + trigger_key) if trigger_key else ''}{('&category=' + category) if category else ''}" style="font-size:12px;color:#2b6cb0;font-weight:600">⬇️ Export all articles as CSV</a>
+        <span style="font-size:12px;color:#718096">Sort by:
+            <a href="?limit={limit}&sort_by=score{key_param}{('&category=' + category) if category else ''}" style="{'font-weight:700;color:#1a365d' if sort_by=='score' else 'color:#2b6cb0'}">Score</a> &middot;
+            <a href="?limit={limit}&sort_by=newest{key_param}{('&category=' + category) if category else ''}" style="{'font-weight:700;color:#1a365d' if sort_by=='newest' else 'color:#2b6cb0'}">Newest</a> &middot;
+            <a href="?limit={limit}&sort_by=title{key_param}{('&category=' + category) if category else ''}" style="{'font-weight:700;color:#1a365d' if sort_by=='title' else 'color:#2b6cb0'}">Title A-Z</a>
+        </span>
+    </p>
     """]
+
+    body.append('<div class="tabs">')
+    body.append(f'<a class="tab{" active" if not category else ""}" href="?limit={limit}{key_param}">All ({len(articles) if not category else total_in_db})</a>')
+    for cat_key, cat_label in CATEGORY_LABELS.items():
+        body.append(f'<a class="tab{" active" if category == cat_key else ""}" href="?limit={limit}&category={cat_key}{key_param}">{html.escape(cat_label)}</a>')
+    body.append('</div>')
 
     body.append(_bar_section("📊 Volume by category (7 days)",
                               [(CATEGORY_LABELS.get(c["category"], c["category"] or "Other"), c["cnt"], "#2b6cb0")
@@ -136,12 +155,11 @@ def build_dashboard_html():
     for category, items in grouped.items():
         label = CATEGORY_LABELS.get(category, category)
         body.append(f"<h3 style='font-size:14px;color:#2d3748;margin:16px 0 8px'>{html.escape(label)} ({len(items)})</h3>")
-        for a in items[:30]:
+        for a in items:
             risk_color = RISK_COLORS.get(a.get("risk_level"), "#718096")
             cred = a.get("credibility", "MEDIUM")
             cred_color = CRED_COLORS.get(cred, "#a0aec0")
             corrob = a.get("corroboration", 1)
-            telegram_url = a.get("telegram_url", "")
             search_key = html.escape(f"{a.get('title','')} {a.get('source','')} {a.get('country','')}".lower())
             body.append(f"""<div class="item" data-search="{search_key}" style="border-left-color:{risk_color}">
                 <div class="meta">{html.escape(a.get('source','') or '')} &middot;
@@ -153,16 +171,16 @@ def build_dashboard_html():
                     &middot; {html.escape((a.get('published') or '')[:10])}
                 </div>
                 <a href="{html.escape(a.get('url','#'))}" target="_blank">{html.escape(a.get('title',''))}</a>
-                <div class="summary">{html.escape((a.get('summary') or '')[:300])}</div>
-                {f'<div style="margin-top:6px"><a href="{html.escape(telegram_url)}" target="_blank" style="font-size:12px;color:#0088cc">📦 Full record on Telegram ↗</a></div>' if telegram_url else ''}
+                <div class="summary">{html.escape(a.get('summary') or '')}</div>
             </div>""")
     if not articles:
         body.append("<p style='color:#718096;font-size:13px'>No articles collected yet.</p>")
     body.append("</div></div>")
 
-    body.append(f'<p class="footer-note">Showing up to 200 most recent articles (metadata from MongoDB; '
-                f'{"full record for each — full summary, all fields — is on Telegram, linked below" if ENABLE_TELEGRAM_BACKUP else "enable ENABLE_TELEGRAM_BACKUP to store full records on Telegram"}). '
-                f'{"Metadata older than " + str(METADATA_CLEANUP_AFTER_DAYS) + " days is periodically cleaned up (full data stays on Telegram)." if ENABLE_METADATA_CLEANUP else "Metadata cleanup is currently off."}</p>')
+    body.append(f'<p class="footer-note">Showing {len(articles)} of {total_in_db} total articles in MongoDB'
+                f'{" for category " + html.escape(category) if category else ""} \u2014 full record shown for each. '
+                f'{"A private Telegram channel also keeps an off-site backup copy of every record." if ENABLE_TELEGRAM_BACKUP else "Enable ENABLE_TELEGRAM_BACKUP for an off-site backup copy."} '
+                f'{"Metadata older than " + str(METADATA_CLEANUP_AFTER_DAYS) + " days is periodically cleaned up (backup copy stays on Telegram)." if ENABLE_METADATA_CLEANUP else "Metadata cleanup is currently off."}</p>')
 
     body.append("""<script>
     function filterArticles() {
